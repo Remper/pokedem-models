@@ -3,7 +3,6 @@ from __future__ import print_function
 
 import tensorflow as tf
 import argparse
-import gzip
 import numpy as np
 import time
 
@@ -13,6 +12,8 @@ import time
 
 parser = argparse.ArgumentParser(description='Basic deep neural network that works with SVM input')
 parser.add_argument('--train', default='', required=True, help='Location of the training set', metavar='#')
+parser.add_argument('--output', default='model', help='Save model to', metavar='#')
+parser.add_argument('--max_epochs', default=100, help='Maximum amount of epochs', metavar='#')
 parser.add_argument('--layers', default=5, help='Amount of hidden layers', metavar='#')
 parser.add_argument('--units', default=256, help='Amount of hidden units per layer', metavar='#')
 parser.add_argument('--batch_size', default=256, help='Amount of samples in a batch', metavar='#')
@@ -21,6 +22,7 @@ args = parser.parse_args()
 args.batch_size = int(args.batch_size)
 args.units = int(args.units)
 args.layers = int(args.layers)
+args.max_epochs = int(args.max_epochs)
 
 print("Initialized with settings:")
 print(vars(args))
@@ -32,16 +34,20 @@ def train_set_metadata(filename):
     """
     max_index = 0
     labels = {}
+    set_size = 0
     with open(filename, 'rb') as reader:
         for line in reader:
+            set_size += 1
             row = line.split(' ')
             if row[0] not in labels:
                 labels[row[0]] = len(labels)
             for ele in row[1:]:
                 index = int(ele.split(':')[0])
+                if index == 0:
+                    raise ValueError("This code doesn't support zero-based SVM features")
                 if index > max_index:
                     max_index = index
-    return max_index, labels
+    return max_index, labels, set_size
 
 
 epoch_counter = 0
@@ -92,8 +98,10 @@ def bias_variable(shape):
 # Restoring embeddings and preparing reader to produce batches
 print("Figuring out training set metadata")
 timestamp = time.time()
-max_index, labels = train_set_metadata(args.train)
-print("Done in", ("%.5f" % (time.time() - timestamp)) + "s")
+max_index, labels, set_size = train_set_metadata(args.train)
+print("Done in %.2fs" % (time.time() - timestamp))
+print("Features: %d. Classes: %d. Training set size: %d (%.2f iter/epoch)"
+      % (max_index, len(labels), set_size, float(set_size)/args.batch_size))
 print("Initializing training set reader")
 reader = train_set_reader(args.train, max_index, labels)
 
@@ -111,7 +119,6 @@ with graph.as_default():
     # Graph begins with input. tf.placeholder tells Tensorflow that we will input those variables at each iteration
     train_features = tf.placeholder(tf.float32, shape=[args.batch_size, max_index])
     train_labels = tf.placeholder(tf.float32, shape=[args.batch_size, len(labels)])
-
 
     # Multiple dense layers (fully connected linear + tanh nonlinearity with random dropouts to help with overfitting)
     input_size = max_index
@@ -135,26 +142,30 @@ with graph.as_default():
     loss_summary = tf.scalar_summary("loss", loss)
     optimizer = tf.train.AdamOptimizer(1e-4).minimize(loss)
 
+    saver = tf.train.Saver()
 
 # Main execution
+check_interval = 500
 with tf.Session(graph=graph) as session:
     # Initializing everythin
     writer = tf.train.SummaryWriter("logs", graph)
     print("Initializing variables")
     timestamp = time.time()
     tf.initialize_all_variables().run()
-    print("Done (" + ("%.5f" % (time.time() - timestamp)) + "s)")
+    print("Done in", ("%.5f" % (time.time() - timestamp)) + "s")
     print("Starting training")
 
-    # Main execution loop. Right now it is a fixed amount of iterations, you might want to change it to epochs later
+    # Main execution loop
     average_loss = 0
     timestamp = time.time()
-    for step in xrange(100000):
+    step = 0
+    tolerance_margin = 10
+    tolerance = tolerance_margin+1
+    last_loss = 0
+    while epoch_counter < args.max_epochs and tolerance > 0:
         # Batch production is done on python side, normally you input word indices
         #  and then use Tensorflow to convert it to proper word vectors
         features, labels = produce_batch(reader, args.batch_size)
-        # We are telling Tensorflow to perform 1 full forward-backpropagation step by including optimizer to the
-        #  list of variables that we want to compute.
         _, loss_value, summary = session.run([optimizer, loss, loss_summary], feed_dict={
             train_features: features,
             train_labels: labels
@@ -163,9 +174,26 @@ with tf.Session(graph=graph) as session:
         writer.add_summary(summary, step)
         # Output average loss periodically
         average_loss += loss_value
-        if step % 500 == 0:
-            print("Average loss at step ("+str(step)+", "+("%.5f" % (time.time() - timestamp)) + "s): ", average_loss)
+        if step % check_interval == 0 and step > 0:
+            if last_loss < average_loss:
+                tolerance -= 1
+            else:
+                if tolerance < tolerance_margin:
+                    tolerance += 1
+            last_loss = average_loss
+            print("Average loss (step: %d, %.2fs, tol: %d): %.5f"
+                  % (step, time.time() - timestamp, tolerance, average_loss/check_interval))
             timestamp = time.time()
             average_loss = 0
+        step += 1
+    if epoch_counter >= args.max_epochs:
+        print("Amount of epochs reached")
+    if tolerance <= 0:
+        print("Tolerance margin reached")
+
+    print("Saving model")
+    timestamp = time.time()
+    saver.save(session, args.output)
+    print("Done in %.2fs" % (time.time() - timestamp))
 
 print("Done")
