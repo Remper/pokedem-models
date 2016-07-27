@@ -4,6 +4,17 @@ Training and model generation code for pokedem-plus
 
 ## Examples
 
+### API startup
+
+```api.py``` implements an entry point for the API that exposes a single trained model via ```/predict?features=[x1,x2,x3,...]``` method
+
+```
+python api.py --input model
+```
+
+Where ```model``` is produced by training scripts described below
+
+
 ### Basic deep neural network
 
 ```train.py``` implements multiple dense layers with tanh as an activation
