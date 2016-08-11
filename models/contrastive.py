@@ -1,6 +1,7 @@
 import time
 import tensorflow as tf
 import numpy as np
+import csv
 from flask import json
 
 from model import Model
@@ -8,14 +9,14 @@ from model import Model
 DEFAULT_LAYERS = 5
 DEFAULT_UNITS = 256
 DEFAULT_BATCH_SIZE = 256
-DEFAULT_MAX_EPOCHS = 100
+DEFAULT_MAX_EPOCHS = 10
 
 DEFAULT_LEARNING_RATE = 1e-4
-DEFAULT_DROPOUT_RATE = 0.8
+DEFAULT_DROPOUT_RATE = 0.9
 
 
-class SimpleModel(Model):
-    def __init__(self, name, inputs, classes):
+class ContrastiveModel(Model):
+    def __init__(self, name, inputs, classes=1):
         Model.__init__(self, name)
         self._inputs = inputs
         self._classes = classes
@@ -50,29 +51,39 @@ class SimpleModel(Model):
         graph = tf.Graph()
         with graph.as_default():
             # Graph begins with input. tf.placeholder tells Tensorflow that we will input those variables at each iteration
+            self._train_label = tf.placeholder(tf.float32, shape=[self._batch_size])
             self._train_features = tf.placeholder(tf.float32, shape=[self._batch_size, self._inputs])
-            self._train_labels = tf.placeholder(tf.float32, shape=[self._batch_size, self._classes])
+            train_input1, train_input2 = tf.split(1, 2, self._train_features, name='input_split')
 
             # Multiple dense layers
-            input_size = self._inputs
+            input_size = self._inputs/2
             hidden_units = self._units
-            layer = self._train_features
+            layers = [train_input1, train_input2]
             for idx in range(self._layers):
                 with tf.name_scope("dense_layer"):
                     weights = self.weight_variable([input_size, hidden_units])
                     biases = self.bias_variable([hidden_units])
-                    hidden = tf.nn.relu(tf.matmul(layer, weights) + biases)
-                    layer = tf.nn.dropout(hidden, self._dropout_rate)
+                    new_layers = []
+                    for layer in layers:
+                        hidden = tf.nn.relu(tf.matmul(layer, weights) + biases)
+                        hidden = tf.nn.dropout(hidden, self._dropout_rate)
+                        new_layers.append(hidden)
+                    layers = new_layers
                     input_size = hidden_units
 
             # Linear layer before softmax
             weights = self.weight_variable([input_size, self._classes])
             biases = self.bias_variable([self._classes])
-            layer = tf.matmul(layer, weights) + biases
+            new_layers = []
+            for layer in layers:
+                layer = tf.matmul(layer, weights) + biases
+                new_layers.append(tf.squeeze(layer, [0]))
+            layers = new_layers
 
-            # Softmax and cross entropy in the end
-            self._loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(layer, self._train_labels))
-            self._prediction = tf.nn.softmax(layer)
+            # Softmax and custom objective in the end
+            batch_losses = tf.nn.sigmoid_cross_entropy_with_logits(layers[0] - layers[1], self._train_label)
+            self._loss = tf.reduce_mean(batch_losses)
+            self._prediction = layers[0]
             self._loss_summary = tf.scalar_summary("loss", self._loss)
             self._optimizer = tf.train.AdamOptimizer(self._learning_rate).minimize(self._loss)
             self._saver = tf.train.Saver()
@@ -98,11 +109,11 @@ class SimpleModel(Model):
         tolerance_margin = 10
         tolerance = tolerance_margin + 1
         min_loss = -1
-        while batch_producer.current_epoch < self._max_epochs and tolerance > 0:
+        while batch_producer.current_epoch < self._max_epochs:
             features, labels = batch_producer.produce(self._batch_size)
             _, loss_value, summary = self._session.run([self._optimizer, self._loss, self._loss_summary], feed_dict={
                 self._train_features: features,
-                self._train_labels:   labels
+                self._train_label: labels
             })
             # Writes loss_summary to log. Each call represents a single point on the plot
             writer.add_summary(summary, step)
@@ -132,19 +143,61 @@ class SimpleModel(Model):
     def predict(self, features):
         self._init()
         self._check_if_ready()
-        features = np.array(features).reshape(self._batch_size, self._inputs)
+        half_input = self._inputs/2
+        features = np.array(features).reshape(self._batch_size, half_input)
+        features = np.pad(features, ((0, 0), (0, half_input)), 'constant')
         return self._prediction.eval(session=self._session, feed_dict={self._train_features: features})
 
     @staticmethod
     def restore_definition(filename):
         params = json.load(open(filename + '.json', 'rb'))
-        model = SimpleModel(params["name"], params["inputs"], params["classes"])
+        model = ContrastiveModel(params["name"], params["inputs"])
         return model
 
     def save_to_file(self, filename):
         Model.save_to_file(self, filename)
         json.dump({
             'name': self._name,
-            'inputs': self._inputs,
-            'classes': self._classes
+            'inputs': self._inputs
         }, open(filename+'.json', 'wb'))
+
+    @staticmethod
+    def get_producer(filename):
+        return CSVBatchProducer(filename)
+
+
+class CSVBatchProducer():
+    def __init__(self, filename):
+        self.current_epoch = 0
+        self.max_index = 0
+        self.labels = {'result': 0}
+        self._reader = self._train_set_reader(filename)
+
+    def produce(self, batch_size):
+        """
+            Produces full batch ready to be input in NN
+        """
+        labels = list()
+        batch = list()
+        while len(labels) < batch_size:
+            label, features = self._reader.next()
+            labels.append(label)
+            batch.append(features)
+        return batch, labels
+
+    def _train_set_reader(self, filename):
+        """
+            Reads training set one by one
+        """
+        while True:
+            with open(filename, 'rb') as reader:
+                csvreader = csv.reader(reader, delimiter=',')
+                for row in csvreader:
+                    label = float(row[0])
+                    if self.max_index == 0:
+                        self.max_index = len(row) - 1
+                    features = np.zeros(self.max_index, dtype=np.float32)
+                    for idx in range(self.max_index):
+                        features[idx] = float(row[idx+1])
+                    yield label, features
+            self.current_epoch += 1

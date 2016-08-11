@@ -3,6 +3,7 @@ import numpy as np
 
 from flask import Flask, request, json, g
 from models.simple import SimpleModel
+from models.contrastive import ContrastiveModel
 
 app = Flask(__name__)
 model = None
@@ -27,13 +28,18 @@ def predict():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Simple API that returns predictions from a model')
     parser.add_argument('--input', default='model', help='Input model', metavar='#')
+    parser.add_argument('--contrastive', default=False, action='store_true', help='Use contrastive model for training')
     args = parser.parse_args()
 
     print("Initialized with settings:")
     print(vars(args))
 
     print("Loading model")
-    model = SimpleModel.restore_definition(args.input)
+
+    SelectedModel = SimpleModel
+    if args.contrastive:
+        SelectedModel = ContrastiveModel
+    model = SelectedModel.restore_definition(args.input)
     model.batch_size(1)
     model.restore_from_file(args.input)
 
