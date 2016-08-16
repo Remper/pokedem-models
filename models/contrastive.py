@@ -59,10 +59,13 @@ class ContrastiveModel(Model):
             input_size = self._inputs/2
             hidden_units = self._units
             layers = [train_input1, train_input2]
+            hist_summaries = []
             for idx in range(self._layers):
                 with tf.name_scope("dense_layer"):
                     weights = self.weight_variable([input_size, hidden_units])
                     biases = self.bias_variable([hidden_units])
+                    hist_summaries.append(tf.histogram_summary("dense_weights_"+str(idx), weights))
+                    hist_summaries.append(tf.histogram_summary("dense_biases_"+str(idx), biases))
                     new_layers = []
                     for layer in layers:
                         hidden = tf.nn.relu(tf.matmul(layer, weights) + biases)
@@ -72,19 +75,28 @@ class ContrastiveModel(Model):
                     input_size = hidden_units
 
             # Linear layer before softmax
-            weights = self.weight_variable([input_size, self._classes])
-            biases = self.bias_variable([self._classes])
-            new_layers = []
-            for layer in layers:
-                layer = tf.matmul(layer, weights) + biases
-                new_layers.append(tf.squeeze(layer, [0]))
-            layers = new_layers
+            with tf.name_scope("pre_softmax_linear_layer"):
+                weights = self.weight_variable([input_size, self._classes])
+                biases = self.bias_variable([self._classes])
+                new_layers = []
+                for layer in layers:
+                    layer = tf.matmul(layer, weights) + biases
+                    new_layers.append(tf.squeeze(layer, [1]))
+                layers = new_layers
+
+            # Logits to probabilities
+            with tf.name_scope("cost"):
+                score_diff = layers[0] - layers[1]
+                exp_res = tf.exp(score_diff)
+                cost = - self._train_label * score_diff + tf.log(1 + exp_res)
 
             # Softmax and custom objective in the end
-            batch_losses = tf.nn.sigmoid_cross_entropy_with_logits(layers[0] - layers[1], self._train_label)
-            self._loss = tf.reduce_mean(batch_losses)
+            #  This is not a correct cross entropy
+            #  batch_losses = tf.nn.sigmoid_cross_entropy_with_logits(layers[0] - layers[1], self._train_label)
+            self._loss = tf.reduce_mean(cost)
             self._prediction = layers[0]
             self._loss_summary = tf.scalar_summary("loss", self._loss)
+            self._hist_summaries = tf.merge_summary(hist_summaries)
             self._optimizer = tf.train.AdamOptimizer(self._learning_rate).minimize(self._loss)
             self._saver = tf.train.Saver()
         return graph
@@ -119,6 +131,8 @@ class ContrastiveModel(Model):
             writer.add_summary(summary, step)
             # Output average loss periodically
             average_loss += loss_value
+            #if step % 10 == 0 and step > 0:
+            #    writer.add_summary(self._session.run(self._hist_summaries), step)
             if step % check_interval == 0 and step > 0:
                 average_loss /= check_interval
                 if min_loss < average_loss:
