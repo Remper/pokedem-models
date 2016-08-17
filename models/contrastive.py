@@ -95,6 +95,7 @@ class ContrastiveModel(Model):
             #  batch_losses = tf.nn.sigmoid_cross_entropy_with_logits(layers[0] - layers[1], self._train_label)
             self._loss = tf.reduce_mean(cost)
             self._prediction = layers[0]
+            self._pair_prediction = tf.div(exp_res, 1 + exp_res)
             self._loss_summary = tf.scalar_summary("loss", self._loss)
             self._hist_summaries = tf.merge_summary(hist_summaries)
             self._optimizer = tf.train.AdamOptimizer(self._learning_rate).minimize(self._loss)
@@ -118,10 +119,10 @@ class ContrastiveModel(Model):
         average_loss = 0
         timestamp = time.time()
         step = 0
-        tolerance_margin = 10
+        tolerance_margin = 20
         tolerance = tolerance_margin + 1
         min_loss = -1
-        while batch_producer.current_epoch < self._max_epochs:
+        while batch_producer.current_epoch < self._max_epochs and tolerance > 0:
             features, labels = batch_producer.produce(self._batch_size)
             _, loss_value, summary = self._session.run([self._optimizer, self._loss, self._loss_summary], feed_dict={
                 self._train_features: features,
@@ -153,6 +154,12 @@ class ContrastiveModel(Model):
         if tolerance <= 0:
             print("Tolerance margin reached")
         self._ready = True
+
+    def pair(self, features):
+        self._init()
+        self._check_if_ready()
+        features = np.array(features).reshape(self._batch_size, self._inputs)
+        return self._pair_prediction.eval(session=self._session, feed_dict={self._train_features: features})
 
     def predict(self, features):
         self._init()

@@ -7,6 +7,8 @@ from models.contrastive import ContrastiveModel
 
 app = Flask(__name__)
 model = None
+args = None
+
 
 @app.route("/predict")
 def predict():
@@ -16,6 +18,26 @@ def predict():
             raise ValueError('provide a list of features')
         features = np.array(json.loads(features))
         result = model.predict(features=features)
+        return json.jsonify(result.reshape([-1]).tolist())
+    except Exception as e:
+        print(e)
+        return json.jsonify({
+            'result': 'error',
+            'message': e.message
+        })
+
+
+@app.route("/pair")
+def pair():
+    """
+        For the pair of samples determine the most probable (only for contrastive learner for now)
+    """
+    try:
+        features = request.args['features']
+        if features is None:
+            raise ValueError('provide a list of features')
+        features = np.array(json.loads(features))
+        result = model.pair(features=features)
         return json.jsonify(result.reshape([-1]).tolist())
     except Exception as e:
         print(e)
