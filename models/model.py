@@ -2,6 +2,7 @@ import tensorflow as tf
 import time
 import numpy as np
 
+
 class Model:
     def __init__(self, name):
         self._name = name
@@ -50,21 +51,21 @@ class Model:
 
     @staticmethod
     def weight_variable(shape):
-        initial = tf.truncated_normal(shape, stddev=0.1, dtype=tf.float32)
+        initial = tf.truncated_normal(shape, stddev=0.1)
         return tf.Variable(initial)
 
     @staticmethod
     def bias_variable(shape):
-        initial = tf.constant(0.1, shape=shape, dtype=tf.float32)
+        initial = tf.constant(0.1, shape=shape)
         return tf.Variable(initial)
 
 
-class SVMBatchProducer():
+class SVMBatchProducer:
     def __init__(self, filename):
         self.current_epoch = 0
         print("Figuring out training set metadata")
         timestamp = time.time()
-        self.max_index, self.labels, self.set_size = self._train_set_metadata(filename)
+        self.max_index, self.labels, self.set_size = self._get_dataset_metadata(filename)
         print("Done in %.2fs" % (time.time() - timestamp))
         print("Features: %d. Classes: %d. Training set size: %d"
               % (self.max_index, len(self.labels), self.set_size))
@@ -77,19 +78,20 @@ class SVMBatchProducer():
         labels = list()
         batch = list()
         while len(labels) < batch_size:
-            label, features = self._reader.next()
+            label, features = self._reader.__next__()
             labels.append(label)
             batch.append(features)
         return batch, labels
 
-    def _train_set_metadata(self, filename):
+    @staticmethod
+    def _get_dataset_metadata(filename):
         """
             Figures out amount of labels and features
         """
         max_index = 0
         labels = {}
         set_size = 0
-        with open(filename, 'rb') as reader:
+        with open(filename, 'r') as reader:
             for line in reader:
                 set_size += 1
                 row = line.split(' ')
@@ -108,7 +110,7 @@ class SVMBatchProducer():
             Reads training set one by one
         """
         while True:
-            with open(filename, 'rb') as reader:
+            with open(filename, 'r') as reader:
                 for line in reader:
                     row = line.split(' ')
                     label = np.zeros(len(self.labels), dtype=np.float32)

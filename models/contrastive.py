@@ -4,7 +4,7 @@ import numpy as np
 import csv
 from flask import json
 
-from model import Model
+from models.model import Model
 
 DEFAULT_LAYERS = 5
 DEFAULT_UNITS = 256

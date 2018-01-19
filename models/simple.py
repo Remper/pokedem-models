@@ -3,7 +3,8 @@ import tensorflow as tf
 import numpy as np
 from flask import json
 
-from model import Model
+from models.model import Model
+from tensorflow.contrib import slim
 
 DEFAULT_LAYERS = 5
 DEFAULT_UNITS = 256
@@ -49,7 +50,7 @@ class SimpleModel(Model):
     def _definition(self):
         graph = tf.Graph()
         with graph.as_default():
-            # Graph begins with input. tf.placeholder tells Tensorflow that we will input those variables at each iteration
+            # Graph begins with input. tf.placeholder tells TF that we will input those variables at each iteration
             self._train_features = tf.placeholder(tf.float32, shape=[self._batch_size, self._inputs])
             self._train_labels = tf.placeholder(tf.float32, shape=[self._batch_size, self._classes])
 
@@ -71,62 +72,68 @@ class SimpleModel(Model):
             layer = tf.matmul(layer, weights) + biases
 
             # Softmax and cross entropy in the end
-            self._loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(layer, self._train_labels))
+            losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._train_labels, logits=layer)
+            self._loss = tf.reduce_mean(losses)
             self._prediction = tf.nn.softmax(layer)
-            self._loss_summary = tf.scalar_summary("loss", self._loss)
-            self._optimizer = tf.train.AdamOptimizer(self._learning_rate).minimize(self._loss)
+            tf.summary.scalar("loss", self._loss)
+            self._global_step = tf.train.get_or_create_global_step()
+            self._optimizer = slim.optimize_loss(loss=self._loss, global_step=self._global_step, learning_rate=None,
+                                                 optimizer=tf.train.AdamOptimizer(), clip_gradients=5.0)
             self._saver = tf.train.Saver()
         return graph
 
     def train(self, batch_producer):
         self._init()
-        # Main execution
-        check_interval = 500
-        # Initializing everything
-        writer = tf.train.SummaryWriter("logs", self._graph)
-        print("Initializing variables")
-        timestamp = time.time()
-        with self._graph.as_default():
-            tf.initialize_all_variables().run(session=self._session)
-        print("Done in %.5fs" % (time.time() - timestamp))
-        print("Starting training")
+        with self._session as sess:
+            # Main execution
+            check_interval = 500
+            # Initializing everything
+            writer = tf.summary.FileWriter(logdir="logs")
+            g_summary = tf.summary.merge_all()
+            print("Initializing variables")
+            timestamp = time.time()
+            tf.global_variables_initializer().run()
+            print("Done in %.5fs" % (time.time() - timestamp))
+            print("Starting training")
 
-        # Main execution loop
-        average_loss = 0
-        timestamp = time.time()
-        step = 0
-        tolerance_margin = 10
-        tolerance = tolerance_margin + 1
-        min_loss = -1
-        while batch_producer.current_epoch < self._max_epochs and tolerance > 0:
-            features, labels = batch_producer.produce(self._batch_size)
-            _, loss_value, summary = self._session.run([self._optimizer, self._loss, self._loss_summary], feed_dict={
-                self._train_features: features,
-                self._train_labels:   labels
-            })
-            # Writes loss_summary to log. Each call represents a single point on the plot
-            writer.add_summary(summary, step)
-            # Output average loss periodically
-            average_loss += loss_value
-            if step % check_interval == 0 and step > 0:
-                average_loss /= check_interval
-                if min_loss < average_loss:
-                    tolerance -= 1
-                else:
-                    if tolerance < tolerance_margin:
-                        tolerance += 1
-                if min_loss > average_loss or min_loss == -1:
-                    min_loss = average_loss
-                print("[+] step: %d, %.2f steps/s, tol: %2d, epoch: %2d, avg.loss: %.5f, min.loss: %.5f"
-                      % (step, float(check_interval) / (time.time() - timestamp),
-                         tolerance, batch_producer.current_epoch, average_loss, min_loss))
-                timestamp = time.time()
-                average_loss = 0
-            step += 1
-        if batch_producer.current_epoch >= self._max_epochs:
-            print("Amount of epochs reached")
-        if tolerance <= 0:
-            print("Tolerance margin reached")
+            # Main execution loop
+            average_loss = 0
+            timestamp = time.time()
+            tolerance_margin = 10
+            tolerance = tolerance_margin + 1
+            min_loss = -1
+            while batch_producer.current_epoch < self._max_epochs and tolerance > 0:
+                features, labels = batch_producer.produce(self._batch_size)
+                _, loss_value, global_step, summary_v = self._session.run(
+                    [self._optimizer, self._loss, self._global_step, g_summary],
+                    feed_dict={
+                        self._train_features: features,
+                        self._train_labels:   labels
+                    })
+
+                # Writes loss_summary to log. Each call represents a single point on the plot
+                writer.add_summary(summary=summary_v, global_step=global_step)
+
+                # Output average loss periodically
+                average_loss += loss_value
+                if global_step % check_interval == 0 and global_step > 0:
+                    average_loss /= check_interval
+                    if min_loss < average_loss:
+                        tolerance -= 1
+                    else:
+                        if tolerance < tolerance_margin:
+                            tolerance += 1
+                    if min_loss > average_loss or min_loss == -1:
+                        min_loss = average_loss
+                    print("[+] step: %d, %.2f steps/s, tol: %2d, epoch: %2d, avg.loss: %.5f, min.loss: %.5f"
+                          % (global_step, float(check_interval) / (time.time() - timestamp),
+                             tolerance, batch_producer.current_epoch, average_loss, min_loss))
+                    timestamp = time.time()
+                    average_loss = 0
+            if batch_producer.current_epoch >= self._max_epochs:
+                print("Amount of epochs reached")
+            if tolerance <= 0:
+                print("Tolerance margin reached")
         self._ready = True
 
     def predict(self, features):
