@@ -102,7 +102,7 @@ class ContrastiveModel(Model):
             self._saver = tf.train.Saver()
         return graph
 
-    def train(self, batch_producer):
+    def train(self, train_prod, eval_prod=None):
         self._init()
         # Main execution
         check_interval = 500
@@ -122,8 +122,8 @@ class ContrastiveModel(Model):
         tolerance_margin = 20
         tolerance = tolerance_margin + 1
         min_loss = -1
-        while batch_producer.current_epoch < self._max_epochs and tolerance > 0:
-            features, labels = batch_producer.produce(self._batch_size)
+        while train_prod.current_epoch < self._max_epochs and tolerance > 0:
+            features, labels = train_prod.produce(self._batch_size)
             _, loss_value, summary = self._session.run([self._optimizer, self._loss, self._loss_summary], feed_dict={
                 self._train_features: features,
                 self._train_label: labels
@@ -145,11 +145,11 @@ class ContrastiveModel(Model):
                     min_loss = average_loss
                 print("[+] step: %d, %.2f steps/s, tol: %2d, epoch: %2d, avg.loss: %.5f, min.loss: %.5f"
                       % (step, float(check_interval) / (time.time() - timestamp),
-                         tolerance, batch_producer.current_epoch, average_loss, min_loss))
+                         tolerance, train_prod.current_epoch, average_loss, min_loss))
                 timestamp = time.time()
                 average_loss = 0
             step += 1
-        if batch_producer.current_epoch >= self._max_epochs:
+        if train_prod.current_epoch >= self._max_epochs:
             print("Amount of epochs reached")
         if tolerance <= 0:
             print("Tolerance margin reached")
